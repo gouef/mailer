@@ -277,7 +277,7 @@ Notes:
 
 ## 🧩 Compatibility Notes
 
-The API shape follows Nette Mail concepts where practical in Go:
+The API shape follows Mail concepts where practical in Go:
 
 - `SetFrom`, `AddTo`, `AddCc`, `AddBcc`, `SetSubject`
 - `SetFromAddress`, `AddToAddress`, `AddCcAddress`, `AddBccAddress`, `AddReplyToAddress`
