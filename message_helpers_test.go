@@ -266,3 +266,50 @@ func TestMessageHelpersMailboxAndMimeBranches(t *testing.T) {
 		t.Fatalf("expected both alternative parts to use 7bit for ascii, got:\n%s", altText)
 	}
 }
+
+func TestMessageHelpersBuildBodyEntityRemainingInlineBranches(t *testing.T) {
+	inline := NewInlineAttachment("logo.png", []byte("img"), "cid-logo")
+
+	body, contentType, err := buildBodyEntity("plain", "<p>html</p>", true, []Attachment{inline})
+	if err != nil {
+		t.Fatalf("buildBodyEntity inline alternative failed: %v", err)
+	}
+
+	bodyText := string(body)
+	if !strings.Contains(contentType, "multipart/related") {
+		t.Fatalf("expected multipart/related content type, got %q", contentType)
+	}
+	if !strings.Contains(bodyText, "Content-Type: multipart/alternative;") {
+		t.Fatalf("expected nested multipart/alternative body, got:\n%s", bodyText)
+	}
+	if !strings.Contains(bodyText, "Content-Type: text/plain; charset=UTF-8") || !strings.Contains(bodyText, "Content-Type: text/html; charset=UTF-8") {
+		t.Fatalf("expected plain and html parts in nested alternative, got:\n%s", bodyText)
+	}
+
+	body, contentType, err = buildBodyEntity("", "<h1>html</h1>", false, []Attachment{inline})
+	if err != nil {
+		t.Fatalf("buildBodyEntity inline html failed: %v", err)
+	}
+
+	bodyText = string(body)
+	if !strings.Contains(contentType, "multipart/related") {
+		t.Fatalf("expected multipart/related content type for inline html, got %q", contentType)
+	}
+	if !strings.Contains(bodyText, "Content-Type: text/html; charset=UTF-8") {
+		t.Fatalf("expected html body part when html-only inline is used, got:\n%s", bodyText)
+	}
+}
+
+func TestMessageHelpersWriteAttachmentPartErrorBranches(t *testing.T) {
+	createPartFailWriter := multipart.NewWriter(&errByteWriter{failAfter: 1})
+	err := writeAttachmentPart(createPartFailWriter, NewAttachment("fail-create.txt", []byte("payload")))
+	if err == nil {
+		t.Fatalf("expected writeAttachmentPart error when creating multipart part fails")
+	}
+
+	failingWriter := multipart.NewWriter(&errByteWriter{failAfter: 240})
+	err = writeAttachmentPart(failingWriter, NewAttachment("big.bin", []byte(strings.Repeat("x", 512))))
+	if err == nil {
+		t.Fatalf("expected writeAttachmentPart error when payload write fails")
+	}
+}
