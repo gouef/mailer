@@ -3,7 +3,9 @@ package mailer
 import (
 	"bytes"
 	"errors"
+	"io"
 	"mime/multipart"
+	"net/textproto"
 	"strings"
 	"testing"
 )
@@ -312,4 +314,252 @@ func TestMessageHelpersWriteAttachmentPartErrorBranches(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected writeAttachmentPart error when payload write fails")
 	}
+}
+
+func TestMessageHelpersMultipartWriterFailureBranches(t *testing.T) {
+	t.Run("buildAlternativePart create part failure", func(t *testing.T) {
+		setMultipartWriterFactory(t, func(_ *bytes.Buffer) mimeMultipartWriter {
+			return &multipartWriterStub{createPartErr: errors.New("create part failed")}
+		})
+
+		if _, _, err := buildAlternativePart("plain", "html"); err == nil {
+			t.Fatalf("expected buildAlternativePart to fail when CreatePart fails")
+		}
+	})
+
+	t.Run("buildAlternativePart write failure", func(t *testing.T) {
+		setMultipartWriterFactory(t, func(_ *bytes.Buffer) mimeMultipartWriter {
+			return &multipartWriterStub{createPartWriters: []io.Writer{&errByteWriter{failAfter: 0}}}
+		})
+
+		if _, _, err := buildAlternativePart("plain", "html"); err == nil {
+			t.Fatalf("expected buildAlternativePart to fail when plain part write fails")
+		}
+	})
+
+	t.Run("buildAlternativePart close failure", func(t *testing.T) {
+		setMultipartWriterFactory(t, func(_ *bytes.Buffer) mimeMultipartWriter {
+			return &multipartWriterStub{
+				createPartWriters: []io.Writer{bytes.NewBuffer(nil), bytes.NewBuffer(nil)},
+				closeErr:          errors.New("close failed"),
+			}
+		})
+
+		if _, _, err := buildAlternativePart("plain", "html"); err == nil {
+			t.Fatalf("expected buildAlternativePart to fail when Close fails")
+		}
+	})
+
+	t.Run("buildAlternativePart html create part failure", func(t *testing.T) {
+		setMultipartWriterFactory(t, func(_ *bytes.Buffer) mimeMultipartWriter {
+			return &multipartWriterStub{
+				createPartWriters: []io.Writer{bytes.NewBuffer(nil)},
+				failCreatePartAt:  2,
+				createPartErr:     errors.New("html create part failed"),
+			}
+		})
+
+		if _, _, err := buildAlternativePart("plain", "html"); err == nil {
+			t.Fatalf("expected buildAlternativePart to fail on html CreatePart")
+		}
+	})
+
+	t.Run("buildAlternativePart html write failure", func(t *testing.T) {
+		setMultipartWriterFactory(t, func(_ *bytes.Buffer) mimeMultipartWriter {
+			return &multipartWriterStub{createPartWriters: []io.Writer{bytes.NewBuffer(nil), &errByteWriter{failAfter: 0}}}
+		})
+
+		if _, _, err := buildAlternativePart("plain", "html"); err == nil {
+			t.Fatalf("expected buildAlternativePart to fail when html write fails")
+		}
+	})
+
+	t.Run("buildBodyEntity related create part failure", func(t *testing.T) {
+		setAlternativePartBuilder(t, func(_, _ string) (*bytes.Buffer, string, error) {
+			return bytes.NewBufferString("alt-body"), "alt-boundary", nil
+		})
+
+		setMultipartWriterFactory(t, func(_ *bytes.Buffer) mimeMultipartWriter {
+			return &multipartWriterStub{createPartErr: errors.New("related create failed")}
+		})
+
+		inline := NewInlineAttachment("logo.png", []byte("img"), "cid-logo")
+		if _, _, err := buildBodyEntity("plain", "<p>html</p>", true, []Attachment{inline}); err == nil {
+			t.Fatalf("expected buildBodyEntity to fail when related CreatePart fails")
+		}
+	})
+
+	t.Run("buildBodyEntity related part write failure with alternative", func(t *testing.T) {
+		setAlternativePartBuilder(t, func(_, _ string) (*bytes.Buffer, string, error) {
+			return bytes.NewBufferString("alt-body"), "alt-boundary", nil
+		})
+
+		setMultipartWriterFactory(t, func(_ *bytes.Buffer) mimeMultipartWriter {
+			return &multipartWriterStub{createPartWriters: []io.Writer{&errByteWriter{failAfter: 0}}}
+		})
+
+		inline := NewInlineAttachment("logo.png", []byte("img"), "cid-logo")
+		if _, _, err := buildBodyEntity("plain", "<p>html</p>", true, []Attachment{inline}); err == nil {
+			t.Fatalf("expected buildBodyEntity to fail when related part write fails")
+		}
+	})
+
+	t.Run("buildBodyEntity body write failure", func(t *testing.T) {
+		setMultipartWriterFactory(t, func(_ *bytes.Buffer) mimeMultipartWriter {
+			return &multipartWriterStub{createPartWriters: []io.Writer{&errByteWriter{failAfter: 0}}}
+		})
+
+		inline := NewInlineAttachment("logo.png", []byte("img"), "cid-logo")
+		if _, _, err := buildBodyEntity("plain", "", false, []Attachment{inline}); err == nil {
+			t.Fatalf("expected buildBodyEntity to fail when body part write fails")
+		}
+	})
+
+	t.Run("buildBodyEntity body create part failure", func(t *testing.T) {
+		setEncodeTextBodyForMIME(t, func(_ string) (string, []byte, error) {
+			return "7bit", []byte("plain"), nil
+		})
+
+		setMultipartWriterFactory(t, func(_ *bytes.Buffer) mimeMultipartWriter {
+			return &multipartWriterStub{createPartErr: errors.New("body create part failed")}
+		})
+
+		inline := NewInlineAttachment("logo.png", []byte("img"), "cid-logo")
+		if _, _, err := buildBodyEntity("plain", "", false, []Attachment{inline}); err == nil {
+			t.Fatalf("expected buildBodyEntity to fail when body CreatePart fails")
+		}
+	})
+
+	t.Run("buildBodyEntity close failure", func(t *testing.T) {
+		setMultipartWriterFactory(t, func(_ *bytes.Buffer) mimeMultipartWriter {
+			return &multipartWriterStub{
+				createPartWriters: []io.Writer{bytes.NewBuffer(nil), bytes.NewBuffer(nil)},
+				closeErr:          errors.New("close failed"),
+			}
+		})
+
+		inline := NewInlineAttachment("logo.png", []byte("img"), "cid-logo")
+		if _, _, err := buildBodyEntity("plain", "", false, []Attachment{inline}); err == nil {
+			t.Fatalf("expected buildBodyEntity to fail when writer close fails")
+		}
+	})
+
+	t.Run("buildBodyEntity inline attachment write failure", func(t *testing.T) {
+		setMultipartWriterFactory(t, func(_ *bytes.Buffer) mimeMultipartWriter {
+			return &multipartWriterStub{createPartWriters: []io.Writer{bytes.NewBuffer(nil), &errByteWriter{failAfter: 0}}}
+		})
+
+		inline := NewInlineAttachment("logo.png", []byte("img"), "cid-logo")
+		if _, _, err := buildBodyEntity("plain", "", false, []Attachment{inline}); err == nil {
+			t.Fatalf("expected buildBodyEntity to fail when inline attachment write fails")
+		}
+	})
+
+	t.Run("buildBodyEntity alternative builder failure", func(t *testing.T) {
+		setAlternativePartBuilder(t, func(_, _ string) (*bytes.Buffer, string, error) {
+			return nil, "", errors.New("alternative failed")
+		})
+
+		if _, _, err := buildBodyEntity("plain", "html", true, nil); err == nil {
+			t.Fatalf("expected buildBodyEntity to fail when alternative part builder fails")
+		}
+	})
+
+	t.Run("buildBodyEntity encode failure", func(t *testing.T) {
+		setEncodeTextBodyForMIME(t, func(_ string) (string, []byte, error) {
+			return "", nil, errors.New("encode failed")
+		})
+
+		inline := NewInlineAttachment("logo.png", []byte("img"), "cid-logo")
+		if _, _, err := buildBodyEntity("plain", "", false, []Attachment{inline}); err == nil {
+			t.Fatalf("expected buildBodyEntity to fail when body encoding fails")
+		}
+	})
+
+	t.Run("buildAlternativePart plain encode failure", func(t *testing.T) {
+		setEncodeTextBodyForMIME(t, func(_ string) (string, []byte, error) {
+			return "", nil, errors.New("plain encode failed")
+		})
+
+		if _, _, err := buildAlternativePart("plain", "html"); err == nil {
+			t.Fatalf("expected buildAlternativePart to fail on plain encode failure")
+		}
+	})
+
+	t.Run("buildAlternativePart html encode failure", func(t *testing.T) {
+		calls := 0
+		setEncodeTextBodyForMIME(t, func(_ string) (string, []byte, error) {
+			calls++
+			if calls == 1 {
+				return "7bit", []byte("plain"), nil
+			}
+			return "", nil, errors.New("html encode failed")
+		})
+
+		if _, _, err := buildAlternativePart("plain", "html"); err == nil {
+			t.Fatalf("expected buildAlternativePart to fail on html encode failure")
+		}
+	})
+}
+
+func setMultipartWriterFactory(t *testing.T, factory func(*bytes.Buffer) mimeMultipartWriter) {
+	previous := newMultipartWriter
+	newMultipartWriter = factory
+	t.Cleanup(func() {
+		newMultipartWriter = previous
+	})
+}
+
+func setEncodeTextBodyForMIME(t *testing.T, fn func(string) (string, []byte, error)) {
+	previous := encodeTextBodyForMIME
+	encodeTextBodyForMIME = fn
+	t.Cleanup(func() {
+		encodeTextBodyForMIME = previous
+	})
+}
+
+func setAlternativePartBuilder(t *testing.T, fn func(string, string) (*bytes.Buffer, string, error)) {
+	previous := buildAlternativePartForBodyEntity
+	buildAlternativePartForBodyEntity = fn
+	t.Cleanup(func() {
+		buildAlternativePartForBodyEntity = previous
+	})
+}
+
+type multipartWriterStub struct {
+	createPartErr     error
+	createPartWriters []io.Writer
+	closeErr          error
+	boundary          string
+	failCreatePartAt  int
+	createPartCalls   int
+}
+
+func (w *multipartWriterStub) CreatePart(_ textproto.MIMEHeader) (io.Writer, error) {
+	w.createPartCalls++
+	if w.failCreatePartAt > 0 && w.createPartCalls == w.failCreatePartAt {
+		return nil, w.createPartErr
+	}
+	if w.failCreatePartAt == 0 && w.createPartErr != nil {
+		return nil, w.createPartErr
+	}
+
+	index := w.createPartCalls - 1
+	if index < len(w.createPartWriters) {
+		writer := w.createPartWriters[index]
+		return writer, nil
+	}
+
+	return bytes.NewBuffer(nil), nil
+}
+
+func (w *multipartWriterStub) Close() error {
+	return w.closeErr
+}
+
+func (w *multipartWriterStub) Boundary() string {
+	if w.boundary != "" {
+		return w.boundary
+	}
+	return "stub-boundary"
 }

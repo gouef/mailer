@@ -4,15 +4,45 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net/textproto"
 	"strings"
 )
 
+type mimeMultipartWriter interface {
+	CreatePart(header textproto.MIMEHeader) (io.Writer, error)
+	Close() error
+	Boundary() string
+}
+
+type stdMultipartWriter struct {
+	writer *multipart.Writer
+}
+
+func (w *stdMultipartWriter) CreatePart(header textproto.MIMEHeader) (io.Writer, error) {
+	return w.writer.CreatePart(header)
+}
+
+func (w *stdMultipartWriter) Close() error {
+	return w.writer.Close()
+}
+
+func (w *stdMultipartWriter) Boundary() string {
+	return w.writer.Boundary()
+}
+
+var newMultipartWriter = func(buf *bytes.Buffer) mimeMultipartWriter {
+	return &stdMultipartWriter{writer: multipart.NewWriter(buf)}
+}
+
+var encodeTextBodyForMIME = encodeTextBody
+var buildAlternativePartForBodyEntity = buildAlternativePart
+
 func buildBodyEntity(textBody string, htmlBody string, hasAlternative bool, inlineAttachments []Attachment) ([]byte, string, error) {
 	if len(inlineAttachments) == 0 {
 		if hasAlternative {
-			altBuf, altBoundary, err := buildAlternativePart(textBody, htmlBody)
+			altBuf, altBoundary, err := buildAlternativePartForBodyEntity(textBody, htmlBody)
 			if err != nil {
 				return nil, "", err
 			}
@@ -28,10 +58,10 @@ func buildBodyEntity(textBody string, htmlBody string, hasAlternative bool, inli
 	}
 
 	buf := bytes.NewBuffer(nil)
-	relatedWriter := multipart.NewWriter(buf)
+	relatedWriter := newMultipartWriter(buf)
 
 	if hasAlternative {
-		altBuf, altBoundary, err := buildAlternativePart(textBody, htmlBody)
+		altBuf, altBoundary, err := buildAlternativePartForBodyEntity(textBody, htmlBody)
 		if err != nil {
 			return nil, "", err
 		}
@@ -53,7 +83,7 @@ func buildBodyEntity(textBody string, htmlBody string, hasAlternative bool, inli
 			bodyType = "text/html"
 		}
 
-		encoding, encodedBody, err := encodeTextBody(bodyContent)
+		encoding, encodedBody, err := encodeTextBodyForMIME(bodyContent)
 		if err != nil {
 			return nil, "", err
 		}
@@ -100,9 +130,9 @@ func splitAttachments(attachments []Attachment) ([]Attachment, []Attachment) {
 
 func buildAlternativePart(textBody string, htmlBody string) (*bytes.Buffer, string, error) {
 	buf := bytes.NewBuffer(nil)
-	altWriter := multipart.NewWriter(buf)
+	altWriter := newMultipartWriter(buf)
 
-	plainEncoding, plainBody, err := encodeTextBody(textBody)
+	plainEncoding, plainBody, err := encodeTextBodyForMIME(textBody)
 	if err != nil {
 		return nil, "", err
 	}
@@ -118,7 +148,7 @@ func buildAlternativePart(textBody string, htmlBody string) (*bytes.Buffer, stri
 		return nil, "", err
 	}
 
-	htmlEncoding, htmlEncodedBody, err := encodeTextBody(htmlBody)
+	htmlEncoding, htmlEncodedBody, err := encodeTextBodyForMIME(htmlBody)
 	if err != nil {
 		return nil, "", err
 	}
@@ -141,7 +171,7 @@ func buildAlternativePart(textBody string, htmlBody string) (*bytes.Buffer, stri
 	return buf, altWriter.Boundary(), nil
 }
 
-func writeAttachmentPart(writer *multipart.Writer, attachment Attachment) error {
+func writeAttachmentPart(writer mimeMultipartWriter, attachment Attachment) error {
 	contentType := attachment.ContentType
 	if contentType == "" {
 		contentType = detectContentType(attachment.Name)
