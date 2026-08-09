@@ -36,6 +36,12 @@ Go package for composing e-mails.
 > Quick start:
 >
 > ```go
+> message := mailer.New().
+>   SetFrom("noreply@example.com").
+>   AddTo("john@example.com").
+>   SetSubject("Welcome").
+>   SetTextBody("Hello from Gouef Mailer")
+>
 > smtpMailer := mailer.NewSMTPMailer("smtp.example.com", 587).
 >   SetAuth("smtp-user", "smtp-password").
 >   SetSecurity(mailer.SecurityStartTLS)
